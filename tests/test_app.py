@@ -1,3 +1,6 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 from src.app import activities
 
 
@@ -106,3 +109,49 @@ def test_unregister_student_not_signed_up_returns_404(client):
     # Assert
     assert response.status_code == 404
     assert response.json()["detail"] == "Student is not signed up for this activity"
+
+
+def test_concurrent_signup_same_email_only_one_success(client):
+    # Arrange
+    activity_name = "Soccer Club"
+    email = "racer@mergington.edu"
+    worker_count = 10
+    barrier = threading.Barrier(worker_count)
+
+    def signup():
+        barrier.wait()  # release all requests at (nearly) the same time
+        return client.post(f"/activities/{activity_name}/signup", params={"email": email})
+
+    # Act
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        responses = list(executor.map(lambda _: signup(), range(worker_count)))
+
+    # Assert
+    statuses = [response.status_code for response in responses]
+    assert statuses.count(200) == 1
+    assert statuses.count(400) == worker_count - 1
+    assert 500 not in statuses
+    assert activities[activity_name]["participants"].count(email) == 1
+
+
+def test_concurrent_unregister_same_email_only_one_success(client):
+    # Arrange
+    activity_name = "Chess Club"
+    email = "michael@mergington.edu"
+    worker_count = 10
+    barrier = threading.Barrier(worker_count)
+
+    def unregister():
+        barrier.wait()  # release all requests at (nearly) the same time
+        return client.delete(f"/activities/{activity_name}/signup", params={"email": email})
+
+    # Act
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        responses = list(executor.map(lambda _: unregister(), range(worker_count)))
+
+    # Assert
+    statuses = [response.status_code for response in responses]
+    assert statuses.count(200) == 1
+    assert statuses.count(404) == worker_count - 1
+    assert 500 not in statuses
+    assert email not in activities[activity_name]["participants"]
